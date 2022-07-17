@@ -1,0 +1,2023 @@
+---
+editor_options: 
+  markdown: 
+    wrap: 72
+
+title: "Mouse_Stress_Analysis" 
+  author: "Phineas Kiprop"
+      date: '2022-05-27'
+
+output: rmarkdown::github_document
+---
+
+## Clear Environment
+
+The first code is made to clear my environment.
+
+```{r Clearing the envivorment , include=FALSE, eval= F }
+knitr::opts_chunk$set(echo = T)
+
+# clear Global Environment
+
+rm(list=ls())
+
+```
+
+## Load Packages
+
+After clearing the environment, it is time to load some packages. A lot of them are not used, but it nice to have it install and loaded.
+
+```{r Pacakge, include=FALSE}
+
+          # code to install packages 
+# install.packages(c("doParallel","pacman","ComplexHeatmap"))
+
+# checking to see if everything is installed 
+
+pacman::p_isinstalled(c("pacman","BiocParallel","gridExtra","labeling","grid","scales", "reshape2","ggplot2","splines","knitr","kableExtra","openxlsx","dplyr","magrittr","pheatmap","ClusterR","cowplot"))
+
+
+            # Loading the packages
+pacman::p_load("pacman","BiocParallel","gridExtra","labeling","grid","scales", "reshape2","ggplot2","splines","knitr","kableExtra","openxlsx","dplyr","magrittr","pheatmap","ClusterR","cowplot", "tidyr","ComplexHeatmap","circlize","stringi","stringr","seriation")
+
+            # Check to see if all are loaded
+pacman::p_isloaded("pacman","BiocParallel","gridExtra","labeling","grid","scales", "reshape2","ggplot2","splines","knitr","kableExtra","openxlsx","dplyr","magrittr","pheatmap","ClusterR","cowplot", "tidyr", "ComplexHeatmap","circlize","stringi","stringr","seriation")
+
+```
+
+## Importing xlsx data 
+
+Since the data set is really large, I used save() to download the data into R and use load() to pull it. Using save() and load(). The reason why I used save() and load() is to save time.
+
+```{r import data from stress portal}
+
+# importing the csv file and label it all_genes, tell R that the files have headers
+
+# all_genes<- read.csv("/Users/phineasrop/Documents/R_Programming/McNair/Mouse_Stress_portal/results.csv", header = T, stringsAsFactors=FALSE)
+
+      # Saving the data R so it doesn't take a long time to load 
+            # save(all_genes, file = "all_genes.RData")
+
+  # Loading the data
+load("all_genes.RData")
+
+# Check to see if all the files are there 
+summary(all_genes)
+
+```
+
+## Filter code by configuration
+
+Updated code for filtering by configurations:
+
+Now load the configurations and parse to isolate different experimental attributes into their own columns.
+
+Fist, load the configurations file and check to see if loads.
+
+```{r load in configurations}
+# import configurations file
+configurations <- read.table(file = "configurations.tsv", header = F, sep = "\t") %>%
+    set_colnames(c("configuration_id", "bioproject", "attr", "attr2", "attr3"))
+
+# Check
+head(configurations[,1:3])
+```
+
+Using Regular Expressions (regex) isolate the condition and create a
+
+```{r split configurations}
+# Now split the 3rd column of all variables/characteristics, and create separate columns
+# Stress
+configurations$Stress <- unlist(sapply(X = configurations$attr, USE.NAMES = F, FUN = function(x) {
+    y <- unlist(str_extract_all(x, pattern = 
+        "(?<=Stress.protocol==)[A-Za-z0-9\\._]+[A-Za-z0-9\\._\\+\\-\\(\\)]+[A-Za-z0-9]+"));
+    y <- gsub(x = y, pattern = "[Cc]ontrol", replacement = "", perl = T);
+    ifelse(is.character(y), stri_remove_empty(y), NA)
+}))
+configurations$Stress[is.na(configurations$Stress)] <- "Control"
+
+# Time of treatment/stress
+configurations$Time <- unlist(sapply(X = configurations$attr, USE.NAMES = F, FUN = function(x) {
+    y <- unlist(str_extract_all(x, pattern = "(?<=Time.from.stress.h==)[A-Za-z0-9\\._]*"));
+    y <- gsub(x = y, pattern = "[Cc]ontrol", replacement = "", perl = T);
+    ifelse(is.character(y), stri_remove_empty(y), NA)
+}))
+configurations$Time <- as.numeric(configurations$Time)
+# Treatment (secondary to/in combination with stress)
+configurations$Treatment <- unlist(sapply(X = configurations$attr, USE.NAMES = F, FUN = function(x) {
+    y <- unlist(str_extract_all(x, pattern = 
+        "(?<=Treatment\\.2==)[A-Za-z0-9\\._]+[A-Za-z0-9\\._\\+\\-\\(\\)]+[A-Za-z0-9]+"));
+    y <- gsub(x = y, pattern = "[Cc]ontrol2", replacement = "", perl = T);
+    ifelse(is.character(y), stri_remove_empty(y), NA)
+}))
+# Brain region
+configurations$Brain_region <- unlist(sapply(X = configurations$attr, USE.NAMES = F, FUN = function(x) {
+    y <- unlist(str_extract_all(x, pattern = "(?<=Subregion==)[A-Za-z0-9\\._]*"));
+    y <- ifelse(y == "PFC", "pfc", ifelse(y == "NACC", "nacc", 
+    ifelse(y == "VTA", "vta", ifelse(y == "HIPP", "hipp", y))));
+    ifelse(is.character(y), stri_remove_empty(y), NA)
+}))
+# Sex
+configurations$Sex <- unlist(sapply(X = configurations$attr, USE.NAMES = F, FUN = function(x) {
+    y <- unlist(str_extract_all(x, pattern = "(?<=Sex==)[A-Za-z0-9\\._]*"));
+    ifelse(is.character(y), stri_remove_empty(y), NA)
+}))
+# Estrus
+# Def: The periodic state of sexual excitement in the female of most mammals
+configurations$Estrus <- unlist(sapply(X = configurations$attr, USE.NAMES = F, FUN = function(x) {
+    y <- unlist(str_extract_all(x, pattern = "(?<=Estrus==)[A-Za-z0-9\\._]*"));
+    ifelse(is.character(y), stri_remove_empty(y), NA)
+}))
+# Phenotype
+configurations$Phenotype <- unlist(sapply(X = configurations$attr, USE.NAMES = F, FUN = function(x) {
+    y <- unlist(str_extract_all(x, pattern = "(?<=Phenotype==)[A-Za-z0-9\\._]*"));
+    y <- gsub(x = y, pattern = "na", replacement = "");
+    ifelse(is.character(y), stri_remove_empty(y), NA)
+}))
+
+# Check
+configurations[1:6, c(1:2,6:12)]
+
+# Do example filter
+configurations %>% filter((is.na(Sex) | Sex == "m") & (Brain_region == "hipp")) %>% dplyr::select(configuration_id) %>% unlist %>% as.character()
+
+# Check number of male datasets for each brain region
+configurations %>% filter((is.na(Sex) | Sex == "m")) %>% dplyr::select(Brain_region) %>% unlist %>% table()
+
+# Check number of male datasets for each type of stress
+configurations %>% filter((is.na(Sex) | Sex == "m")) %>% dplyr::select(Stress) %>% unlist %>% table()
+```
+
+Now assign each configuration to one of three categories (using Table S2 from the paper):
+
+1.  Acute stress
+2.  Sub chronic stress
+3.  Chronic stress
+
+```{r partition by stress}
+# Dictionary of basic stress partition - levels: 1=acute, 2=subchronic, 3=chronic
+stress_dict <- data.frame(bioproject = sort(unique(configurations$bioproject)),
+    Basic_stress = c(1,1,1,3,1,3,3,2,3,1,3,3,3,3,1,2,3,3) %>% as.character %>% as.factor %>%
+        recode_factor(`1` = "acute", `2` = "subchronic", `3` = "chronic"))
+levels(stress_dict$Basic_stress)
+
+# Convert the lone CSDS to 10d CSDS (it's the exact same procedure)
+configurations$Stress[configurations$configuration_id %in% "PRJNA352967_16"] <- "10d_CSDS"
+
+# Check possible stressors
+configurations %>% dplyr::select(Stress) %>% unlist %>% unique()
+
+# Dictionary linking specific stress abbreviations to their descriptions/terms
+spec_stress_dict <- data.frame(Stress = c("CFC", "30_min_RS", "30d_CSDS", "10d_CSDS", "6_d_SVS", 
+    "21d_CRS", "CFC_plus_d2_retrieval", "10d_CSDS+d28_stress_re-exposure", "21d_CVS", "Swim", 
+    "Control", "Restraint_(1h)+cold_T(2h)_3d", "CRS_15d", "IMMO-AUD", "AUD", "UCMS", 
+    "ELS-10d_CSDS", "ELS", "STVS"), Stress_description = 
+    c("Electric foot shock (contextual fear conditioning)", "30 minute restraint stress", 
+    "30 day chronic social defeat, 5 min housed 24 hrs nearby", "10 day chronic social defeat, 5 min housed 24 hrs nearby", 
+    "Subchronic variable stress (mild foot shock, tail suspension, and restraint alternated over 6 days, 1 hr per day)", 
+    "21 day chronic restraint stress, 2 hrs per day", "Electric foot shock (CFC) plus re-exposure to conditioned stimulus on day 2", 
+    "10 day chronic social defeat, 5 min housed 24 hrs nearby plus re-exposure to stress after 28 days", 
+    "Chronic variable stress (mild foot shock, tail suspension, and restraint alternated over 21 days, 1 hr per day)", 
+    "Cold swim for 6 hrs", "no stress treatment", "Restraint for 1 hr plus cold temp for 2 hrs for 3 days",
+    "15 day chronic restraint stress, 2 hrs per day", "Immobilization (2 hr) plus auditory fear conditioning (electric foot shock, 5 trials over 14 min)", 
+    "Auditory fear conditioning (electric foot shock, 5 trials over 14 min)", 
+    "Unpredictable chronic mild stress 9 weeks - various mild stressors (social, cage tilting, confinement,\n no bedding, soiled bedding, damp bedding, etc) alternated daily",
+    "Early life stress (separated from mothers 3-4 hr per day / 10 days) plus adult chronic social defeat stress (10d)", 
+    "Early life stress- separated from mothers for 3-4 hr per day for 10 days", 
+    "Substhreshold variable stress, 3 days (same paradigm as SVS but only 3 days)"))
+
+# Now add this info back to the configurations dataframe and reorder so 
+# that the most pertinent data is first
+configurations <- left_join(x=configurations, y=stress_dict) %>% left_join(y = spec_stress_dict) %>%
+    dplyr::select(configuration_id, bioproject, Basic_stress, Stress, Stress_description, Treatment, Time, Brain_region, 
+    Sex, Estrus, Phenotype, attr, attr2, attr3)
+
+# Make specific stressors into factor and reorder
+# arrange(.data = configurations, Basic_stress, Stress) %>% dplyr::select(Stress) %>% unlist %>% unique()
+configurations$Stress <- factor(configurations$Stress, levels = c("Control", "AUD", "IMMO-AUD", 
+    "CFC_plus_d2_retrieval", "CFC", "Swim", "30_min_RS", "6_d_SVS", "Restraint_(1h)+cold_T(2h)_3d", 
+    "STVS", "UCMS", "21d_CVS", "ELS", "CRS_15d", "21d_CRS", "ELS-10d_CSDS", "10d_CSDS", 
+    "10d_CSDS+d28_stress_re-exposure", "30d_CSDS"))
+configurations %<>% arrange(Stress)
+```
+
+## Creating a function that can filter by conditions. 
+
+Now I make a function to take the data frame of all log2FC and statistical value for the different projects & configurations from the Mouse Stress Portal, and filter them based on the experimental attributes saved in the *configurations.tsv* file/data frame.
+
+```{r filter function}
+# Create custom function that will take the stress results data frame and
+# the configurations data frame and filter the stress data by characteristics
+# from the configurations
+config_filter <- function(data = NULL, config = configurations, 
+    filter_col = NULL, filter_vals = NULL){
+    # data = all_genes
+    # config = configurations
+    # filter_col = "Stress"
+    # filter_vals = "10d_CSDS"
+    # rm(data, config, filter_col, filter_vals)
+  
+    # Filter to find configurations of interest based on filter column and values specified
+    if (any(is.na(filter_vals))) {
+        filt_configs <- config[unlist(is.na(config[,filter_col]) | (config[,filter_col] %in% na.omit(filter_vals))),] %>% 
+            dplyr::select(configuration_id) %>% unlist %>% unique()
+    } else {
+        filt_configs <- config[unlist(config[,filter_col]) %in% filter_vals,] %>% 
+            dplyr::select(configuration_id) %>% unlist %>% unique()
+    }
+    
+    # Now pull only the data corresponding to these configurations from the data set
+    results <- filter(.data = data, configuration_id %in% filt_configs)
+    
+    # Output results
+    return(results)
+}
+
+
+config_filter(all_genes, config = configurations, filter_col = "Stress", "CFC")
+
+all_genes_qvalue.05 <- all_genes %>% filter(gene_qvalue <= .05)
+
+# Test it
+config_filter(all_genes, config = configurations, filter_col = "Stress",
+    "10d_CSDS")
+
+
+```
+
+## organize stress levels by bio projects
+
+first by getting the header of all_genes
+
+On the research paper there is a table that already sorts the bio projects by the level of stress. I will use that table to create my variables.
+
+```{r sort data into levels of stress}
+# structure (summary) 
+str(all_genes)
+
+#  code to view all the bioprojects names 
+all_genes["bioproject"[]] %>% table()
+
+
+# acute_stress_bioprojects total 6 
+acute_stress_bioprojects <- all_genes %>% filter(bioproject %in% c("PRJNA309704", "PRJNA391140","PRJNA479752","PRJNA267703","PRJNA281134","PRJNA292861"))
+
+# Subchronic data table total 2 
+subchronic_stress_bioprojects<-all_genes %>% filter(bioproject %in% c("PRJNA495330","PRJNA336339"))
+
+
+# chronic data total 10  
+
+chronic_stress_bioprojects<-all_genes %>% filter(bioproject %in% c("PRJNA401858","PRJNA415948","PRJNA398031","PRJNA516641","PRJNA293822","PRJNA322294","PRJNA323485","PRJNA430409","PRJNA506950","PRJNA352967"))
+
+```
+
+### Now, the plan is to organize the data set and find the genes that are DEGS and have a q-value less then .001 and save that for later. This code may not be used later.
+
+This is will be the first subcategory. Having the data sorted by q-values so we can find the DEGS that are significant.
+
+```{r DEGS subcategory qvalue .001, echo= F , include= F}
+
+# creating a list of the DEGS for each data set.
+
+# The first data set is going to be the total gene expression that I will compare with the subcategory 
+DEGS_allgenes_qvalue.001_test <- all_genes %>% filter(gene_qvalue <= .001) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for acute stress with a qvalue of .01
+DEGS_acute_qvalue.001_test <- acute_stress_bioprojects %>% filter(gene_qvalue <= .001) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for sub chronic stress with a qvalue of .01
+DEGS_subchronic_qvalue.001_test <- subchronic_stress_bioprojects %>% filter(gene_qvalue <= .001) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for chronic stress with a qvalue of .01
+DEGS_chronic_qvalue.001_test <- chronic_stress_bioprojects %>% filter(gene_qvalue <= .001) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+
+# compare the subcategory with all_DEGS
+
+sum(DEGS_allgenes_qvalue.001_test %in% DEGS_acute_qvalue.001_test)
+
+sum(DEGS_allgenes_qvalue.001_test %in% DEGS_subchronic_qvalue.001_test)
+
+sum(DEGS_allgenes_qvalue.001_test %in% DEGS_chronic_qvalue.001_test)
+
+# compare the subcategory with each other 
+
+sum(DEGS_acute_qvalue.001_test %in% DEGS_subchronic_qvalue.001_test)
+
+sum(DEGS_acute_qvalue.001_test %in% DEGS_chronic_qvalue.001_test)
+
+sum(DEGS_subchronic_qvalue.001_test %in% DEGS_chronic_qvalue.001_test)
+
+# see in there is a gene expression that is in all of the DEGS_test 
+
+DEGS_overlap_acute_sub_qvalue.01 <- DEGS_acute_qvalue.001_test[DEGS_acute_qvalue.001_test %in% DEGS_subchronic_qvalue.001_test]
+
+sum(DEGS_overlap_acute_sub_qvalue.01 %in% DEGS_chronic_qvalue.001_test)
+
+
+#rm(DEGS_allgenes_qvalue.001_test, DEGS_allgenes_qvalue.01_test,DEGS_overlap_acute_sub_qvalue.001,DEGS_chronic_qvalue.001_test,DEGS_acute_qvalue.001_test,DEGS_overlap_acute_sub_qvalue.01,DEGS_subchronic_qvalue.001_test,DEGS_subchronic_qvalue.01_test)
+```
+
+```{r DEGS subcategory qvalue .01, }
+
+# creating a list of the DEGS for each data set.
+
+# The first data set is going to be the total gene expression that I will compare with the subcategory 
+DEGS_allgenes_qvalue.01_test <- all_genes %>% filter(gene_qvalue <= .01) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for acute stress with a qvalue of .01
+DEGS_acute_qvalue.01_test <- acute_stress_bioprojects %>% filter(gene_qvalue <= .01) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for sub chronic stress with a qvalue of .01
+DEGS_subchronic_qvalue.01_test <- subchronic_stress_bioprojects %>% filter(gene_qvalue <= .01) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for chronic stress with a qvalue of .01
+DEGS_chronic_qvalue.01_test <- chronic_stress_bioprojects %>% filter(gene_qvalue <= .01) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+
+# compare the subcategory with all_DEGS
+
+sum_all_v_acute_qvalue.01 <- sum(DEGS_allgenes_qvalue.01_test %in% DEGS_acute_qvalue.01_test)
+
+sum_all_v_sub_qvalue.01 <- sum(DEGS_allgenes_qvalue.01_test %in% DEGS_subchronic_qvalue.01_test)
+
+sum_all_v_chron_qvalue.01 <- sum(DEGS_allgenes_qvalue.01_test %in% DEGS_chronic_qvalue.01_test)
+
+# compare the subcategory with each other 
+
+sum_acute_v_sub_qvalue.01 <- sum(DEGS_acute_qvalue.01_test %in% DEGS_subchronic_qvalue.01_test)
+
+sum_acute_v_chron_qvalue.01 <-sum(DEGS_acute_qvalue.01_test %in% DEGS_chronic_qvalue.01_test)
+
+sum_sub_v_chron_qvalue.01 <-sum(DEGS_subchronic_qvalue.01_test %in% DEGS_chronic_qvalue.01_test)
+
+# see in there is a gene expression that is in all of the DEGS_test 
+
+DEGS_overlap_acute_sub_qvalue.01 <- DEGS_acute_qvalue.01_test[DEGS_acute_qvalue.01_test %in% DEGS_subchronic_qvalue.01_test]
+
+sum_all_v_all_qvalue.01 <-sum(DEGS_overlap_acute_sub_qvalue.01 %in% DEGS_chronic_qvalue.01_test)
+
+#rm(DEGS_allgenes_qvalue.01_test, DEGS_allgenes_qvalue.01_test, DEGS_acute_qvalue.01_test,DEGS_acute_qvalue.01_test,DEGS_chronic_qvalue.01_test,DEGS_overlap_acute_sub_qvalue.01)
+
+```
+
+```{r DEGS subcategory qvalue .05 }
+
+# creating a list of the DEGS for each data set.
+
+# The first data set is going to be the total gene expression that I will compare with the subcategory
+
+DEGS_allgenes_qvalue.05 <- all_genes %>% filter(gene_qvalue <= .05) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+
+#list of all DEGS for acute stress
+DEGS_acute_qvalue.05_test <- acute_stress_bioprojects %>% filter(gene_qvalue <= .05) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for sub chronic stress
+DEGS_subchronic_qvalue.05_test <- subchronic_stress_bioprojects %>% filter(gene_qvalue <= .05) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for chronic stress
+DEGS_chronic_qvalue.05_test <- chronic_stress_bioprojects %>% filter(gene_qvalue <= .05) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+
+# compare the subcategory with all_DEGS
+
+sum_all_v_acute_qvalue.05 <- sum(DEGS_allgenes_qvalue.05 %in% DEGS_acute_qvalue.05_test)
+
+sum_all_v_sub_qvalue.05 <- sum(DEGS_allgenes_qvalue.05 %in% DEGS_subchronic_qvalue.05_test)
+
+sum_all_v_chron_qvalue.05 <- sum(DEGS_allgenes_qvalue.05 %in% DEGS_chronic_qvalue.05_test)
+
+# compare the subcategory with each other 
+
+sum_acute_v_sub_qvalue.05 <- sum(DEGS_acute_qvalue.05_test %in% DEGS_subchronic_qvalue.05_test)
+
+sum_acute_v_chron_qvalue.05 <- sum(DEGS_acute_qvalue.05_test %in% DEGS_chronic_qvalue.05_test)
+
+sum_sub_v_chron_qvalue.05 <- sum(DEGS_subchronic_qvalue.05_test %in% DEGS_chronic_qvalue.05_test)
+
+# see in there is a gene expression that is in all of the DEGS_test 
+
+DEGS_overlap_acute_sub_qvalue.05 <- DEGS_acute_qvalue.05_test[DEGS_acute_qvalue.05_test %in% DEGS_subchronic_qvalue.05_test]
+
+sum_all_v_all_qvalue.05 <- sum(DEGS_overlap_acute_sub_qvalue.05 %in% DEGS_chronic_qvalue.05_test)
+
+#rm(DEGS_acute_test, DEGS_subchronic_test, DEGS_chronic_test, DEGS_allgenes_test, DEGS_overlap_acute_sub)
+
+```
+
+```{r DEGS subcategory qvalue .1 }
+
+# creating a list of the DEGS for each data set.
+
+# The first data set is going to be the total gene expression that I will compare with the subcategory 
+DEGS_allgenes_qvalue.1_test <- all_genes %>% filter(gene_qvalue <= .1) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for acute stress
+DEGS_acute_qvalue.1_test <- acute_stress_bioprojects %>% filter(gene_qvalue <= .1) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for sub chronic stress
+DEGS_subchronic_qvalue.1_test <- subchronic_stress_bioprojects %>% filter(gene_qvalue <= .1) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for chronic stress
+DEGS_chronic_qvalue.1_test <- chronic_stress_bioprojects %>% filter(gene_qvalue <= .1) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+
+# compare the subcategory with all_DEGS
+
+sum_all_v_acute_qvalue.1 <- sum(DEGS_allgenes_qvalue.1_test %in% DEGS_acute_qvalue.1_test)
+
+sum_all_v_sub_qvalue.1 <-sum(DEGS_allgenes_qvalue.1_test %in% DEGS_subchronic_qvalue.1_test)
+
+sum_all_v_chron_qvalue.1 <-sum(DEGS_allgenes_qvalue.1_test %in% DEGS_chronic_qvalue.1_test)
+
+# compare the subcategory with each other 
+
+sum_acute_v_sub_qvalue.1 <- sum(DEGS_acute_qvalue.1_test %in% DEGS_subchronic_qvalue.1_test)
+
+sum_acute_v_chron_qvalue.1 <- sum(DEGS_acute_qvalue.1_test %in% DEGS_chronic_qvalue.1_test)
+
+sum_sub_v_chron_qvalue.1 <- sum(DEGS_subchronic_qvalue.1_test %in% DEGS_chronic_qvalue.1_test)
+
+# see in there is a gene expression that is in all of the DEGS_test 
+
+DEGS_overlap_acute_sub_qvalue.1 <- DEGS_acute_qvalue.1_test[DEGS_acute_qvalue.1_test %in% DEGS_subchronic_qvalue.1_test]
+
+sum_all_v_all_qvalue.1 <- sum(DEGS_overlap_acute_sub_qvalue.1 %in% DEGS_chronic_qvalue.1_test)
+
+#rm(DEGS_acute_test, DEGS_subchronic_test, DEGS_chronic_test, DEGS_allgenes_test, DEGS_overlap_acute_sub)
+
+```
+
+```{r DEGS subcategory qvalue .5, eval= T }
+
+# creating a list of the DEGS for each data set.
+
+# The first data set is going to be the total gene expression that I will compare with the subcategory 
+DEGS_allgenes_qvalue.5_test <- all_genes %>% filter(gene_qvalue <= .5) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for acute stress
+DEGS_acute_qvalue.5_test <- acute_stress_bioprojects %>% filter(gene_qvalue <= .5) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for sub chronic stress
+DEGS_subchronic_qvalue.5_test <- subchronic_stress_bioprojects %>% filter(gene_qvalue <= .5) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+#list of all DEGS for chronic stress
+DEGS_chronic_qvalue.5_test <- chronic_stress_bioprojects %>% filter(gene_qvalue <= .5) %>% distinct(gene_name) %>% unlist() %>% as.character()
+
+
+# compare the subcategory with all_DEGS
+
+sum_all_v_acute_qvalue.5 <- sum(DEGS_allgenes_qvalue.5_test %in% DEGS_acute_qvalue.5_test)
+
+sum_all_v_sub_qvalue.5 <- sum(DEGS_allgenes_qvalue.5_test %in% DEGS_subchronic_qvalue.5_test)
+
+sum_all_v_chron_qvalue.5 <- sum(DEGS_allgenes_qvalue.5_test %in% DEGS_chronic_qvalue.5_test)
+
+# compare the subcategory with each other 
+
+sum_acute_v_sub_qvalue.5 <- sum(DEGS_acute_qvalue.5_test %in% DEGS_subchronic_qvalue.5_test)
+
+sum_acute_v_chron_qvalue.5 <- sum(DEGS_acute_qvalue.5_test %in% DEGS_chronic_qvalue.5_test)
+
+sum_sub_v_chron_qvalue.5 <- sum(DEGS_subchronic_qvalue.5_test %in% DEGS_chronic_qvalue.5_test)
+
+# see in there is a gene expression that is in all of the DEGS_test 
+
+DEGS_overlap_acute_qvalue.5_sub <- DEGS_acute_qvalue.5_test[DEGS_acute_qvalue.5_test %in% DEGS_subchronic_qvalue.5_test]
+
+sum_all_v_all_qvalue.5 <- sum(DEGS_overlap_acute_qvalue.5_sub %in% DEGS_chronic_qvalue.5_test) 
+
+#rm(DEGS_acute_test, DEGS_subchronic_test, DEGS_chronic_test, DEGS_allgenes_test, DEGS_overlap_acute_sub)
+
+```
+
+## Find overlapping genes
+
+I want to see how many gene are in each stress group with different q-values. After find that, I want to plot the percentage of each gene in each stress group. The rational behind this is to get a rough idea of the DEGs location and frequency.
+
+```{r Finding percentages of overlap with each configuration }
+str(acute_stress_bioprojects)
+
+# Using dyplr to find genes that have q value that (.01,.05, .1, .5) and removing duplicate gene names 
+
+all_genes %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .01),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> all_gene_DEGS_percentages_qvalue.01
+
+all_genes %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .05),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> all_genes_DEGS_percentages_qvalue.05
+
+all_genes %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .1),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> all_genes_DEGS_percentages_qvalue_.1
+
+all_genes %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .5),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> all_genes_DEGS_percentages_qvalue_.5
+
+# acute stress   
+
+acute_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .01),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> acute_DEGS_percentages_qvalue.01
+
+acute_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .05),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> acute_DEGS_percentages_qvalue.05
+
+acute_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .1),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> acute_DEGS_percentages_qvalue.1
+
+acute_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .5),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> acute_DEGS_percentages_qvalue.5
+
+# subchronic  
+
+subchronic_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .01),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> subchronic_DEGS_percentages_qvalue.01
+
+subchronic_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .05),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> subchronic_DEGS_percentages_qvalue.05
+
+subchronic_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .1),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> subchronic_DEGS_percentages_qvalue.1
+
+subchronic_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .5),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> subchronic_DEGS_percentages_qvalue.5
+
+# chronic   
+
+chronic_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .01),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> chronic_DEGS_percentages_qvalue.01
+
+chronic_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .05),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> chronic_DEGS_percentages_qvalue.05
+
+chronic_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .1),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> chronic_DEGS_percentages_qvalue.1
+
+chronic_stress_bioprojects %>% group_by(gene_name) %>% summarize(count = sum(gene_qvalue <= .5),
+                  total = length(unique(configuration_id)), 
+                  percent = count/total) %>% arrange(desc(percent)) -> chronic_DEGS_percentages_qvalue.5
+
+```
+
+Now that I have the data sorted, it is time to plot it.
+
+```{r, percentage Scatterplot}
+
+#Creating a data base with the information above
+
+x_full <- c(
+  "acute and subchronic\noverlap qvalue(.01)", "acute and chronic overlap qvalue(.01)","subchronic and chronic overlap qvalue(.01)",
+  "acute and subchronic overlap qvalue(.05)","acute and chronic overlap qvalue(.05)","subchronic and chronic overlap qvalue(.05)",
+  "acute and subchronic overlap qvalue(.1)","acute and chronic overlap qvalue(.1)","subchronic and chronic overlap qvalue(.1)",
+  "acute and subchronic overlap qvalue(.5)","acute and chronic overlap qvalue(.5)","subchronic and chronic overlap qvalue(.5)")
+      
+x_category <-  
+  c(
+  "AS_0.01", "AC_0.01","SC_0.01",
+  "AS_0.05","AC_0.05","SC_0.05",
+  "AS_0.1","AC_0.1","SC_0.1",
+  "AS_0.5","AC_0.5","SC_0.5"
+  )
+  
+qvalues <- c(
+rep("q value of <=.01",3),
+rep("q value of <=.05",3),
+rep("q value of <=.1",3),
+rep("q value of <=.5",3)
+  
+) 
+
+overlaps<- c(
+  
+sum_acute_v_sub_qvalue.01 ,
+sum_acute_v_chron_qvalue.01 ,
+sum_sub_v_chron_qvalue.01 ,
+
+sum_acute_v_sub_qvalue.05 ,
+sum_acute_v_chron_qvalue.05 ,
+sum_sub_v_chron_qvalue.05 ,
+
+sum_acute_v_sub_qvalue.1 ,
+sum_acute_v_chron_qvalue.1 ,
+sum_sub_v_chron_qvalue.1 ,
+
+sum_acute_v_sub_qvalue.5 ,
+sum_acute_v_chron_qvalue.5 ,
+sum_sub_v_chron_qvalue.5  
+  
+)
+
+# Using Mutate to add a new colume called Stress Group  
+
+  Scatter_data_1 <- rbind.data.frame(acute_DEGS_percentages_qvalue.01 %>% mutate(stress_group = "A", Qval ="0.01"),
+               subchronic_DEGS_percentages_qvalue.01 %>% mutate(stress_group ="S", Qval ="0.01"),
+               chronic_DEGS_percentages_qvalue.01  %>% mutate(stress_group ="C", Qval ="0.01"),
+               
+               acute_DEGS_percentages_qvalue.05 %>% mutate(stress_group = "A", Qval="0.05"),
+               subchronic_DEGS_percentages_qvalue.05 %>% mutate(stress_group ="S", Qval ="0.05"),
+               chronic_DEGS_percentages_qvalue.05 %>% mutate(stress_group ="C", Qval ="0.05"),
+               
+               acute_DEGS_percentages_qvalue.1 %>% mutate(stress_group = "A", Qval ="0.1"),
+               subchronic_DEGS_percentages_qvalue.1 %>% mutate(stress_group ="S", Qval ="0.1"),
+               chronic_DEGS_percentages_qvalue.1  %>% mutate(stress_group ="C", Qval ="0.1")
+             )
+
+  
+Scatter_data_1_filter_G_0 <- Scatter_data_1 %>% filter(percent > 0) 
+
+# Creating a scatterplot
+ggplot(Scatter_data_1_filter_G_0, aes(stress_group, percent, color = Qval)) + 
+ geom_point(position = position_jitterdodge(.3)) +
+ theme_cowplot(11) 
+```
+
+Making a
+
+```{r, percentage barplot}
+
+acute_DEGS_percentages_qvalue.01 %>% arrange(desc(count))
+
+# ggplot(Scatter_data_1_filter_30, aes(stress_group, percent, group = Qval, color = Qval)) + geom_bar(stat="identity")
+ 
+ggplot(Scatter_data_1_filter_G_0, mapping = aes(x = stress_group, 
+        fill = forcats::fct_rev (as.factor(count)))) +
+        geom_bar( position = "stack", width = 0.8, color = NA) +
+        facet_wrap(~ Qval) + theme(legend.position = "right") + scale_y_log10() + labs(fill = "Number of \n overlapping \n datasets")
+```
+
+BARPLOT TEMPLATE FROM DAN <!-- ```{r} -->
+
+<!-- # prepare for cluster -->
+
+<!-- ggplot(TDP_PR36_GO_RNAseq_summ, mapping = aes(x = GO_title, y = Count, fill = forcats::fct_rev(as.factor(Num_Datasets)))) + geom_bar(stat = "identity", position = "stack", width = 0.8, color = "black") + facet_wrap(\~ Qval) -->
+
+<!-- ``` -->
+
+G
+
+```{r}
+
+  # Scatter_data_1 <- rbind.data.frame(acute_DEGS_percentages_qvalue.01 %>% mutate(stress_group = "A", Qval ="0.01"),
+  #              subchronic_DEGS_percentages_qvalue.01 %>% mutate(stress_group ="S", Qval ="0.01"),
+  #              chronic_DEGS_percentages_qvalue.01  %>% mutate(stress_group ="C", Qval ="0.01"),
+  #              
+  #              acute_DEGS_percentages_qvalue.05 %>% mutate(stress_group = "A", Qval="0.05"),
+  #              subchronic_DEGS_percentages_qvalue.05 %>% mutate(stress_group ="S", Qval ="0.05"),
+  #              chronic_DEGS_percentages_qvalue.05 %>% mutate(stress_group ="C", Qval ="0.05"),
+  #              
+  #              acute_DEGS_percentages_qvalue.1 %>% mutate(stress_group = "A", Qval ="0.1"),
+  #              subchronic_DEGS_percentages_qvalue.1 %>% mutate(stress_group ="S", Qval ="0.1"),
+  #              chronic_DEGS_percentages_qvalue.1  %>% mutate(stress_group ="C", Qval ="0.1")
+  #            )
+
+
+  DF1 <- rbind.data.frame(
+               acute_DEGS_percentages_qvalue.05 %>% mutate(stress_group = "A") %>% filter(percent > 0)  ,
+               subchronic_DEGS_percentages_qvalue.05%>% mutate(stress_group ="S") %>% filter(percent > 0) ,
+               chronic_DEGS_percentages_qvalue.05 %>% mutate(stress_group ="C") %>% filter(percent > 0) 
+             )  %>% select(gene_name, stress_group) %>% group_by(gene_name) %>% summarise(overlaps = paste0(unique(stress_group), collapse = "_")) 
+                                                                                            
+                                                                                          
+
+  DF2 <- rbind.data.frame(
+               acute_DEGS_percentages_qvalue.05 %>% mutate(stress_group = "A") %>% filter(percent > 0) ,
+               subchronic_DEGS_percentages_qvalue.05%>% mutate(stress_group ="S") %>% filter(percent > 0) ,
+               chronic_DEGS_percentages_qvalue.05 %>% mutate(stress_group ="C") %>% filter(percent > 0) 
+             )  %>% select(gene_name, stress_group) %>% group_by(gene_name) %>% summarise(overlaps = paste0(unique(stress_group), collapse = "_")) 
+
+
+DF2$N_overlaps <- apply(DF2, MARGIN = 1, FUN = function(x) {length(unlist(strsplit(split = '_', x = x['overlaps'])))})
+
+
+DF2 %>% group_by(overlaps) %>% summarize(N_overlaps = length(N_overlaps)) %>%
+  ggplot(aes(x=overlaps, y = N_overlaps+.2)) +
+  geom_col() + scale_y_log10("counts + 1") 
+
+table(DF2$overlaps)
+
+DF2 %>% filter(overlaps == "A_S_C")
+
+
+# all_genes %>% filter(gene_name == "Arc")
+#  
+# all_genes %>% filter(gene_name == "Ciart")
+
+
+# DF2 <- DF2 %>% rowwise %>% mutate(N_overlaps)
+
+
+# apply(DF2, MARGIN = 1, FUN = function(x) {length(gregexpr("_", x["overlaps"])) + 1})
+
+  
+# DF2$N_overlaps <- apply(DF2, MARGIN = 1, FUN = function(x) {strsplit(split = "_", x = x["overlaps"])})
+
+
+```
+
+Time to start creating a cluster plot of DEGs. A cluster plot is used to show all the expression of each gene, whether that be positive and negative. Once the cluster map is printed we can analyze the cluster map to find areas of interest.
+
+```{r Test cluster , Eval= F }
+
+tmp <- all_genes %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_matrix) <- unlist(gene_df[,1])
+
+
+clusters <- hclust(dist(gene_matrix, method = "euclidean"), method = "complete")
+
+
+heatmap(gene_matrix, distfun = function(x) dist(x=x, method = "euclidean"), hclustfun = function(d) hclust(d=d, method = "complete")) 
+
+
+
+```
+My first attempt of a detailed complex heat map failed. The bioProject and name are unreadable
+```{r Complex heatmap, fig.width = 10, fig.height = 80}
+
+
+#pheatmap(gene_matrix)
+
+library(RColorBrewer)
+
+quantile(gene_matrix, probs = c(0.001, 0.01, 0.05, 0.5, 0.95, 0.99, 0.999))
+
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+
+custombreaks <- seq(from=-2, to=2, length.out=75)
+
+
+# pdf("test2.pdf", width = 10, height = 80)
+# pheatmap(mat=gene_matrix, cellwidth=5, cellheight=0.5, color=hmcol, breaks=custombreaks,
+#          cluster_cols = F, cluster_rows = F, clustering_distance_rows = "euclidean",
+#          clustering_method = "complete", fontsize_col = 4.5, fontsize_row = 0.5,
+#          show_rownames = F, show_colnames = T, main = "Expr Heatmap - Kmeans Clusters",
+#          annotation_legend = F
+# )
+# dev.off()
+
+
+
+# pheatmap(mat=gene.matrix, cellwidth=7, cellheight=1, color=hmcol, breaks=custombreaks,
+#          cluster_cols = F, cluster_rows = F, fontsize_col = 6, fontsize_row = 1,
+#          show_rownames = F, show_colnames = T, main = "Expr Heatmap - Kmeans Clusters",
+#          # annotation_row = annotation.df
+#          annotation_legend = F, filename = "   Kclust-heatmap_Z-norm_rawvals.pdf",
+#          width = 3, height = 17
+# )
+
+
+```
+
+Sorting the data to show male only and the Hippo Campus, then creating a cluster plot 
+
+```{r filter and reshape data male onlyhippo Campus only, eval=FALSE}
+# Check the different types of stress data and brain regions included when we exclude females
+configurations[,c(1:4,6:11)] %>% filter(is.na(Sex) | (Sex == "m")) %>% dplyr::select(Stress) %>% unlist %>% table()
+configurations[,c(1:4,6:11)] %>% filter(is.na(Sex) | (Sex == "m")) %>% dplyr::select(Brain_region) %>% unlist %>% table()
+
+# Now get a set of configuration ID's, ordered by type of stress experiment and timepoint, and
+# filtered to only include hippocampal brain regions and male/NA experiments
+m_hipp_IDs <- configurations[,c(1:4,6:11)] %>% filter(is.na(Sex) | (Sex == "m"), (Brain_region %in% 
+    c("hipp", "hipp_CA1", "hipp_dorsal", "hipp_vDG", "hipp_ventral"))) %>% arrange(Basic_stress, 
+    Stress, Phenotype, Time) %>% dplyr::select(configuration_id) %>% unlist %>% as.character()
+
+# Filter stress data set to include only datasets that include male data and hippocampal brain regions.
+# Then filter to get only genes that have a q-value < 0.05. 
+
+# Another way to filer 
+
+# tmp <- config_filter(data = all_genes_qvalue.05, filter_col = "Brain_region", filter_vals =  c("hipp", "hipp_CA1", "hipp_dorsal", "hipp_vDG", "hipp_ventral")) %>% config_filter(filter_col = "Sex", filter_vals = c(NA, "m"))
+
+# tmp <- config_filter(data = all_genes, filter_col = "configuration_id", filter_vals = m_hipp_IDs)
+
+qval.05_genes <- all_genes_qvalue.05 %>% filter(!is.na(gene_qvalue) & (gene_qvalue < 0.05)) %>% 
+    dplyr::select(gene_name) %>% unlist %>% unique %>% sort()
+stress_df_filtered <- tmp %>% filter(gene_name %in% qval.05_genes)
+
+# Reshape the data for clustering (into genes-by-columns matrix)
+gene_expr_df <- pivot_wider(data = stress_df_filtered, id_cols = "gene_name", names_from = "configuration_id",
+    values_from = "gene_logfc") %>% as.data.frame()
+
+# Make into gene expression numerical matrix
+gene_expr_matrix <- as.matrix(gene_expr_df[,2:ncol(gene_expr_df)])
+rownames(gene_expr_matrix) <- as.character(gene_expr_df$gene_name)
+
+# Reorder columns by ordering of configuration vector above
+gene_expr_matrix <- gene_expr_matrix[,match(x = m_hipp_IDs, table = colnames(gene_expr_matrix))]
+
+# Check ordering is correct by comparing the two and checking if all are equivalent (all TRUE's)
+all(unlist(lapply(X = 1:length(colnames(gene_expr_matrix)), FUN = function(x) {
+    colnames(gene_expr_matrix)[x] == m_hipp_IDs[x]})))
+
+# Now rename columns based on key attributes
+configurations <- configurations %>% rowwise %>% mutate(col_name = paste0(c(as.character(Basic_stress),
+    as.character(Stress), Brain_region, paste0(Time, "hr")), collapse = "_"))
+colnames(gene_expr_matrix) <- configurations[match(x = m_hipp_IDs, table = configurations$configuration_id),] %>% 
+    dplyr::select(col_name) %>% unlist()
+
+# Check the number of empty cells -- 7.2% of cells are empty
+sum(is.na(gene_expr_matrix)) / (dim(gene_expr_matrix)[1] * dim(gene_expr_matrix)[2])
+
+# correct empty cells to 0's for now
+gene_expr_matrix[is.na(gene_expr_matrix)] <- 0
+
+# Check and make sure this worked - and check final gene expresssion matrix
+sum(is.na(gene_expr_matrix))
+head(gene_expr_matrix)
+```
+
+```{r attempt to normalize and cluster, fig.width=3, fig.height=40, eval= FALSE}
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+which(c(F,F,T,F,T))
+which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+min(gene_expr_matrix)
+max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+ pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1,
+         main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+dev.off()
+
+
+# png(file = "StressMicePortal_M-hipp_Hclust.png", width = 4, height = 69, units = "in", res = 1300)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = .7, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 0.45,
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+#   dev.off()
+```
+ 
+ 
+ Sorting each brain region and creating cluster map to find any patterns.
+```{r brain region isolation}
+
+#find the names of all the Brain region in the dataset
+
+configurations$Brain_region %>% unique()
+
+#Assigning them to a variable and adding it to the Global Enviorment 
+
+vta_Brain_region_DEGs <- config_filter(all_genes, config = configurations, filter_col = "Brain_region", "vta")
+
+cea_Brain_region_DEGs <- config_filter(all_genes, config = configurations, filter_col = "Brain_region", "cea")
+
+nacc_Brain_region_DEGs <- config_filter(all_genes, config = configurations, filter_col = "Brain_region", "nacc")
+
+pfc_Brain_region_DEGs <- config_filter(all_genes, config = configurations, filter_col = "Brain_region", c("pfc_acc", "pfc", "pfc_m"))   # add pfc and pfc_m
+
+fc_Brain_region_DEGs <- config_filter(all_genes, config = configurations, filter_col = "Brain_region", "fc")
+
+ht_Brain_region_DEGs <- config_filter(all_genes, config = configurations, filter_col = "Brain_region", "ht")
+
+amy_Brain_region_DEGs <- config_filter(all_genes, config = configurations, filter_col = "Brain_region", "amy")
+
+bnst_Brain_region_DEGs <- config_filter(all_genes, config = configurations, filter_col = "Brain_region", "bnst")
+
+
+
+```
+
+Using  a template code, I made a cluster map of each brain region and them plotted them to look for more tends. 
+```{R vta clusting, fig.width=3, fig.height= 60, eval = F}
+
+summary(vta_Brain_region_DEGs)
+
+tmp <- vta_Brain_region_DEGs %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_vta.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1,
+#          main = "Expr Heatmap - Hclust")
+# dev.off()
+# 
+
+# png(file = "StressMicePortal_Vta.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 4, cellheight = .48, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 0.45,
+         main = "  Expr Heatmap - Hclust")
+
+# dev.off()
+
+
+```
+
+```{R cea clusting, fig.width=3, fig.height=40, eval = F}
+
+
+summary(cea_Brain_region_DEGs)
+
+tmp <- cea_Brain_region_DEGs %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust")
+# dev.off()
+
+
+
+
+png(file = "StressMicePortal_Cea.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = .7, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 0.45,
+         main = "  Expr Heatmap - Hclust")
+
+dev.off()
+
+
+```
+
+```{R nacc clusting, fig.width=3, fig.height= 85, eval = F}
+
+
+summary(nacc_Brain_region_DEGs)
+
+tmp <- nacc_Brain_region_DEGs %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+
+
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+# Not need, makes it look good
+# rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+
+
+
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+#png(file = "StressMicePortal_M-hipp_Hclust.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = .7, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 0.45,
+         main = "Expr Heatmap - Hclust")
+
+
+ # dev.off()
+
+
+```
+
+```{R pfc clusting, fig.width=3, fig.height=40 eval = F}
+
+
+summary(pfc_Brain_region_DEGs)
+
+tmp <- pfc_Brain_region_DEGs %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+#png(file = "StressMicePortal_pfc.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = .7, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 0.45,
+         main = "  Expr Heatmap - Hclust")
+
+
+ # dev.off()
+
+
+```
+
+```{R fc clusting, fig.width=3, fig.height=40, eval = F}
+
+summary(fc_Brain_region_DEGs)
+
+tmp <- fc_Brain_region_DEGs %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1,
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+#png(file = "StressMicePortal_fc.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = .7, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 0.45,
+         main = "  Expr Heatmap - Hclust")
+
+
+ # dev.off()
+
+
+```
+
+```{R amy clusting, fig.width=3, fig.height=40,  eval = F}
+
+summary(amy_Brain_region_DEGs)
+
+tmp <- amy_Brain_region_DEGs %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+#png(file = "StressMicePortal_amy.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = .7, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 0.45,
+         main = "  Expr Heatmap - Hclust")
+
+
+ # dev.off()
+
+
+```
+
+```{R bnst clusting, fig.width=3, fig.height=40, eval = F}
+
+summary(ht_Brain_region_DEGs)
+
+tmp <- ht_Brain_region_DEGs %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+#png(file = "StressMicePortal_bsnt.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = .7, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 0.45,
+         main = "  Expr Heatmap - Hclust")
+
+
+ # dev.off()
+
+
+```
+
+In the Male hippo campus cluster arc was in a cluster of highly express genes. I wanted to see what the express of ark is comapred to gene related to it. I download arc PPI network and enter twenty gene and created a cluster.
+```{r Arc Gene clusting, eval = F, fig.width= 7, fig.height= 3}
+
+arc_gene_filter <- all_genes %>% filter(gene_name %in% c("Aph1a",
+"App","Bace1","Bdnf","Cacng2","Ctnnb1","Dlg1","Dlg1","Dlg3","Dlg4","Egr1","Gria1","Grin2b"
+,"Ncstn","Ngfr","Ntrk2" ,"Psen1","Psenen","Sh3gl1", "Arc"))
+
+
+summary(arc_gene_filter)
+
+tmp <- arc_gene_filter %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+# png(file = "arc_gene_matrix.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = 3, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 3,
+         main = "  Expr Heatmap - Hclust")
+ # dev.off()
+
+
+
+                                       # Label Bioprojects
+
+
+colnames(gene_expr_matrix)
+head(configurations)
+
+configurations <- configurations %>% rowwise %>% mutate(col_name = paste0(as.character(Basic_stress), 
+        "_", as.character(Stress), "_", as.character(Brain_region)))
+
+new_gene_expr_matrix <- gene_expr_matrix
+
+newcols_df <- left_join(x=data.frame(configuration_id = colnames(gene_expr_matrix)), y = configurations)
+colnames(new_gene_expr_matrix) <- newcols_df$col_name
+
+pheatmap(mat = new_gene_expr_matrix, cellwidth = 3, cellheight = 3, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, fontsize_row = 3,
+         cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "complete",
+         main = "Arc PPI Heatmap - Hclust")
+
+
+
+
+```
+
+```{r Ciart Gene clusting, eval = F}
+
+Ciart_gene_filter <- all_genes %>% filter(gene_name %in% 
+    c("Ciart", "Arntl","Bhlhe41", "Cib1", "Cipc", "Clock", "Cry1", "Cry2", "Csnk1d", "Csnk1e", "Dbp", "Fam73b", "Ncor1", "Npas2", "Nr1d1", "Nr1d2","Per1" ,"Per2" ,"Per3" ,"Sirt1"))
+
+
+
+summary(Ciart_gene_filter)
+
+tmp <- Ciart_gene_filter %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+# png(file = "arc_gene_matrix.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = 3, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 3,
+         main = "  Expr Heatmap - Hclust")
+ # dev.off()
+
+
+
+
+                                       # Label Bioprojects
+
+
+colnames(gene_expr_matrix)
+head(configurations)
+
+configurations <- configurations %>% rowwise %>% mutate(col_name = paste0(as.character(Basic_stress), 
+        "_", as.character(Stress), "_", as.character(Brain_region)))
+
+new_gene_expr_matrix <- gene_expr_matrix
+
+newcols_df <- left_join(x=data.frame(configuration_id = colnames(gene_expr_matrix)), y = configurations)
+colnames(new_gene_expr_matrix) <- newcols_df$col_name
+
+pheatmap(mat = new_gene_expr_matrix, cellwidth = 3, cellheight = 3, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, fontsize_row = 3,
+         cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "complete",
+         main = "  Ciart PPI Heatmap - Hclust")
+
+
+
+
+```
+
+```{r Ciart/Ark PPI conbine}
+
+Ciart_arc_gene_filter <- rbind(Ciart_gene_filter, arc_gene_filter) %>% distinct()
+
+tmp <- Ciart_arc_gene_filter %>% filter(gene_name %in% DEGS_allgenes_qvalue.05)
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+# png(file = "arc_gene_matrix.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = 3, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 3,
+         main = "  Expr Heatmap - Hclust")
+ # dev.off()
+
+
+
+                                       # Label Bioprojects
+
+
+colnames(gene_expr_matrix)
+head(configurations)
+
+configurations <- configurations %>% rowwise %>% mutate(col_name = paste0(as.character(Basic_stress), 
+        "_", as.character(Stress), "_", as.character(Brain_region)))
+
+new_gene_expr_matrix <- gene_expr_matrix
+
+newcols_df <- left_join(x=data.frame(configuration_id = colnames(gene_expr_matrix)), y = configurations)
+colnames(new_gene_expr_matrix) <- newcols_df$col_name
+
+pheatmap(mat = new_gene_expr_matrix, cellwidth = 3, cellheight = 3, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, fontsize_row = 3,
+         cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "complete",
+         main = "  Expr Heatmap - Hclust")
+
+
+
+```
+
+```{r Arc and Ciart only,}
+
+
+
+tmp <- Ciart_arc_gene_filter %>% filter(gene_name %in% c("Arc", "Ciart")) 
+
+gene_df <- tmp %>% as.data.frame %>% pivot_wider(id_cols = "gene_name", names_from = "configuration_id",
+          values_from = "gene_logfc", values_fill = 0)
+
+gene_df[is.list(gene_df)]
+
+gene_expr_matrix <- gene_df[,2:ncol(gene_df)] %>% as.matrix()
+
+
+rownames(gene_expr_matrix) <- unlist(gene_df[,1])
+
+
+
+# First try scaling by standard deviation only - using apply function to rowwise transform the data
+norm_gene_expression_mat <- t(apply(X = gene_expr_matrix, MARGIN = 1, FUN = function(x) {
+    x / sd(x, na.rm = T)
+})) %>% as.matrix()
+
+# Hierarchically cluster the normalized data
+rowclust <- hclust(dist(norm_gene_expression_mat, method = "euclidean"), method = "complete")
+
+# Reorder leaves to "optimal leaf ordering" which is more aesthetically pleasing/digestible
+# TAKES >10 MINUTES
+
+
+rowclust <- reorder(rowclust, dist(norm_gene_expression_mat, method = "euclidean"), method = "OLO")
+ 
+# Code for save/load point:
+# saveRDS(rowclust, file = "StressMicePortal_M-hipp-data.RDS")
+# rowclust <- readRDS(file = "StressMicePortal_M-hipp-data.RDS")
+
+# To 'remake' the clustered gene expression matrix for identifying where row splits should be
+# final_gene_expr_results <- gene_expr_matrix[rowclust$order,]
+
+# the which() function will take a vector of logicals and return the index/number value for
+# those that are TRUE
+# which(c(F,F,T,F,T))
+# which(rownames(final_gene_expr_results) == "Nek3")
+
+# Get an idea for the scale for the data
+# min(gene_expr_matrix)
+# max(gene_expr_matrix)
+max_val <- max(c(abs(min(gene_expr_matrix)), min(gene_expr_matrix)), na.rm = T)
+
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+# Identify where I should put gaps between the columns
+data.frame(columns = colnames(gene_expr_matrix), index = 1:length(colnames(gene_expr_matrix))) %>%
+    set_rownames(NULL)
+
+# Plot 'pre-computed' optimal leaf ordering of hierarchical clustering, but use the raw gene expression
+# data rather than the normalized data to display on the plot.  'cluster_rows = rowclust' is the key
+# parameter here to display pre-computed clustering
+
+# pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+# pheatmap(mat = gene_expr_matrix, cellwidth = 5, cellheight = 1, breaks = custombreaks, color = hmcol,
+#          cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 1, 
+#          main = "  Expr Heatmap - Hclust", gaps_col=c(14,15))
+# dev.off()
+
+
+
+
+# png(file = "arc_gene_matrix.png", width = 4, height = 69, units = "in", res = 1300)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 3, cellheight = 3, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, cluster_cols = F, fontsize_row = 3,
+         main = "  Expr Heatmap - Hclust")
+ # dev.off()
+
+
+                                       # Label Bioprojects
+
+
+colnames(gene_expr_matrix)
+head(configurations)
+
+configurations <- configurations %>% rowwise %>% mutate(col_name = paste0(as.character(Basic_stress), 
+        "_", as.character(Stress), "_", as.character(Brain_region)))
+
+new_gene_expr_matrix <- gene_expr_matrix
+
+newcols_df <- left_join(x=data.frame(configuration_id = colnames(gene_expr_matrix)), y = configurations)
+colnames(new_gene_expr_matrix) <- newcols_df$col_name
+
+pheatmap(mat = new_gene_expr_matrix, cellwidth = 3, cellheight = 3, breaks = custombreaks, color = hmcol,
+         cluster_rows = rowclust, fontsize_col = 4, fontsize_row = 3,
+         cluster_cols = T, clustering_distance_cols = "euclidean", clustering_method = "complete",
+         main = "  Arc& Cirat only Heatmap - Hclust")
+
+
+
+
+
+
+```
+
+```{r clusting template code, eval = F}
+# Create a function for custom break values for the heatmap colors- which has 
+# closer together breaks around 0 and farther apart for farther from 0
+hmcol <- colorRampPalette(rev(brewer.pal(11,"RdBu")))(75)
+rate_of_change <- 1.49 # Can change this between 1 - 1.5 -- higher values = more 'compressed' so that values closer to logFC 0 are strongly colored
+custombreaks <- (tan(seq(-1*rate_of_change,rate_of_change,length.out=75))/
+    max(tan(seq(-1*rate_of_change,rate_of_change,length.out=75))))*
+    ((floor(max_val*100)+1)/100)
+custombreaks %<>% sort.int()
+
+pdf(file = "StressMicePortal_M-hipp_Hclust.pdf", width = 4, height = 135)
+
+pheatmap(mat = gene_expr_matrix, cellwidth = 5.3, cellheight = 1, breaks = custombreaks, color = hmcol,
+         cluster_rows = TRUE, clustering_distance_rows = "euclidean", clustering_method = "complete",
+         fontsize_col = 4, cluster_cols = F, fontsize_row = 1, main = "  Expr Heatmap - Hclust")
+
+dev.off()
+
+```
